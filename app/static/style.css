@@ -1,0 +1,15 @@
+/* Custom styles can be added here if needed beyond Tailwind CSS */
+.loading-overlay {
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 50;
+}
+
+.loading-spinner {
+    border-top-color: #3498db;
+    animation: spinner 1s linear infinite;
+}
+
+@keyframes spinner {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
