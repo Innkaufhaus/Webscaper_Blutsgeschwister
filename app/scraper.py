@@ -19,13 +19,22 @@ class ProductScraper:
             logger.info("Starting Playwright and launching browser...")
             playwright = await async_playwright().start()
             self.browser = await playwright.chromium.launch(
-                timeout=60000,  # 60 second timeout for browser launch
+                headless=True,  # Run in headless mode
+                args=[
+                    '--disable-gpu',
+                    '--disable-dev-shm-usage',
+                    '--disable-setuid-sandbox',
+                    '--no-sandbox',
+                    '--no-zygote',
+                ],
+                timeout=120000,  # 120 second timeout for browser launch
             )
             self.context = await self.browser.new_context(
                 viewport={'width': 1280, 'height': 800},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             )
             self.page = await self.context.new_page()
+            await self.page.set_default_timeout(60000)  # 60 second timeout for all page operations
             logger.info("Browser and page setup complete")
             return self
         except Exception as e:
