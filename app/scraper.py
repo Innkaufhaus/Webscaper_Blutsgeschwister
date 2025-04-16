@@ -15,17 +15,32 @@ class ProductScraper:
         self.page = None
 
     async def __aenter__(self):
-        playwright = await async_playwright().start()
-        self.browser = await playwright.chromium.launch()
-        self.context = await self.browser.new_context(
-            viewport={'width': 1280, 'height': 800},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        )
-        self.page = await self.context.new_page()
-        return self
+        try:
+            logger.info("Starting Playwright and launching browser...")
+            playwright = await async_playwright().start()
+            self.browser = await playwright.chromium.launch(
+                timeout=60000,  # 60 second timeout for browser launch
+            )
+            self.context = await self.browser.new_context(
+                viewport={'width': 1280, 'height': 800},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            )
+            self.page = await self.context.new_page()
+            logger.info("Browser and page setup complete")
+            return self
+        except Exception as e:
+            logger.error(f"Error during browser setup: {str(e)}")
+            if self.browser:
+                await self.browser.close()
+            raise
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.browser.close()
+        try:
+            if self.browser:
+                await self.browser.close()
+                logger.info("Browser closed successfully")
+        except Exception as e:
+            logger.error(f"Error closing browser: {str(e)}")
 
     async def scrape_product(self, url: str) -> Dict:
         """
@@ -34,29 +49,29 @@ class ProductScraper:
         try:
             logger.info(f"Starting to scrape URL: {url}")
             
-            # Navigate to the page and wait for network idle
-            await self.page.goto(url, wait_until="networkidle", timeout=30000)
-            
-            # Wait for page to be fully loaded
-            await asyncio.sleep(2)  # Give JavaScript some time to execute
-            
-            # Check if we're on a product page by looking for common product page elements
-            is_product_page = await self.page.evaluate("""
-                () => {
-                    const selectors = [
-                        '.product-detail',
-                        '.product-information',
-                        '.product-gallery',
-                        'h1.product-title',
-                        '[data-product-id]'
-                    ];
-                    return selectors.some(selector => document.querySelector(selector));
-                }
-            """)
-            
-            if not is_product_page:
-                logger.error("Not a valid product page")
-                raise Exception("Die URL scheint keine gültige Produktseite zu sein.")
+            # Navigate to the page with a timeout
+            try:
+                logger.info("Navigating to product page...")
+                await self.page.goto(url, wait_until="networkidle", timeout=60000)  # 60 second timeout
+                logger.info("Page loaded successfully")
+            except PlaywrightTimeout:
+                logger.error("Timeout while loading the page")
+                raise Exception("Die Seite konnte nicht geladen werden. Bitte versuchen Sie es später erneut.")
+            except Exception as e:
+                logger.error(f"Error during page navigation: {str(e)}")
+                raise
+
+            # Wait for critical elements
+            try:
+                logger.info("Waiting for product data to load...")
+                await self.page.wait_for_selector('[data-product-id]', timeout=30000)  # 30 second timeout
+                logger.info("Product data found on page")
+            except PlaywrightTimeout:
+                logger.error("Product data not found on page")
+                raise Exception("Keine Produktdaten auf der Seite gefunden.")
+            except Exception as e:
+                logger.error(f"Error waiting for product data: {str(e)}")
+                raise
 
             # Extract all required product data
             product_data = {
@@ -67,28 +82,25 @@ class ProductScraper:
                 "passform": await self._get_fit_description(),
                 "details": await self._get_details(),
                 "kategorie": await self._get_category(),
-                "metafields": {}  # Will be populated after basic data is collected
+                "metafields": await self._get_metafields()
             }
 
-            # Log the extracted data for debugging
-            logger.info("Extracted product data:")
-            for key, value in product_data.items():
-                if key != "details":  # Skip logging HTML details
-                    logger.info(f"{key}: {value}")
-
-            # Generate metafields after we have the basic data
-            product_data["metafields"] = await self._get_metafields(product_data)
+            # Log extracted data summary
+            logger.info(f"Extracted data summary: Article #{product_data['artikelnummer']}, "
+                       f"Name: {product_data['name']}, "
+                       f"Sizes count: {len(product_data['groessen'])}, "
+                       f"Images count: {len(product_data['bilder'])}")
 
             # Validate the extracted data
-            if not product_data["artikelnummer"] and not product_data["name"]:
-                raise Exception("Keine Produktdaten gefunden.")
+            if not product_data["artikelnummer"]:
+                raise Exception("Artikelnummer konnte nicht gefunden werden.")
+            
+            if not product_data["name"]:
+                raise Exception("Produktname konnte nicht gefunden werden.")
 
             logger.info("Successfully scraped product data")
             return product_data
 
-        except PlaywrightTimeout:
-            logger.error("Timeout while loading the page")
-            raise Exception("Die Seite konnte nicht geladen werden. Bitte versuchen Sie es später erneut.")
         except Exception as e:
             logger.error(f"Error scraping product: {str(e)}")
             raise
@@ -98,25 +110,8 @@ class ProductScraper:
         try:
             article_number = await self.page.evaluate("""
                 () => {
-                    // Try multiple selectors
-                    const selectors = [
-                        '[data-product-id]',
-                        '[data-article-number]',
-                        '.product-number',
-                        '.sku',
-                        '[itemprop="sku"]'
-                    ];
-                    
-                    for (const selector of selectors) {
-                        const element = document.querySelector(selector);
-                        if (element) {
-                            const value = element.getAttribute('data-product-id') || 
-                                        element.getAttribute('data-article-number') || 
-                                        element.textContent.trim();
-                            if (value) return value;
-                        }
-                    }
-                    return '';
+                    const element = document.querySelector('[data-product-id]');
+                    return element ? element.getAttribute('data-product-id') : '';
                 }
             """)
             logger.info(f"Found article number: {article_number}")
@@ -130,21 +125,8 @@ class ProductScraper:
         try:
             name = await self.page.evaluate("""
                 () => {
-                    const selectors = [
-                        'h1.product-title',
-                        'h1.product-name',
-                        '.product-detail h1',
-                        '[itemprop="name"]',
-                        '.product-name'
-                    ];
-                    
-                    for (const selector of selectors) {
-                        const element = document.querySelector(selector);
-                        if (element) {
-                            return element.textContent.trim();
-                        }
-                    }
-                    return '';
+                    const element = document.querySelector('h1.product-title');
+                    return element ? element.textContent.trim() : '';
                 }
             """)
             logger.info(f"Found product name: {name}")
@@ -158,23 +140,10 @@ class ProductScraper:
         try:
             sizes = await self.page.evaluate("""
                 () => {
-                    const selectors = [
-                        '.size-selector option:not([disabled])',
-                        '.size-options .available',
-                        '[data-size]',
-                        '.variant-size',
-                        '.size-variant'
-                    ];
-                    
-                    for (const selector of selectors) {
-                        const elements = document.querySelectorAll(selector);
-                        if (elements.length) {
-                            return Array.from(elements)
-                                .map(el => el.textContent.trim())
-                                .filter(size => size && !['Größe wählen', 'Select size'].includes(size));
-                        }
-                    }
-                    return [];
+                    const sizeElements = document.querySelectorAll('.size-selector option:not([disabled])');
+                    return Array.from(sizeElements)
+                        .map(el => el.textContent.trim())
+                        .filter(size => size && size !== 'Größe wählen');
                 }
             """)
             logger.info(f"Found sizes: {sizes}")
@@ -188,23 +157,10 @@ class ProductScraper:
         try:
             images = await self.page.evaluate("""
                 () => {
-                    const selectors = [
-                        '.product-gallery img[src]',
-                        '.product-images img[src]',
-                        '.gallery-image[src]',
-                        '[data-image-role="product"] img[src]',
-                        '.product-detail img[src]'
-                    ];
-                    
-                    for (const selector of selectors) {
-                        const elements = document.querySelectorAll(selector);
-                        if (elements.length) {
-                            return Array.from(elements)
-                                .map(img => img.src)
-                                .filter(src => src && src.startsWith('http'));
-                        }
-                    }
-                    return [];
+                    const images = document.querySelectorAll('.product-gallery img[src]');
+                    return Array.from(images)
+                        .map(img => img.src)
+                        .filter(src => src && src.startsWith('http'));
                 }
             """)
             logger.info(f"Found {len(images)} images")
@@ -218,21 +174,8 @@ class ProductScraper:
         try:
             fit = await self.page.evaluate("""
                 () => {
-                    const selectors = [
-                        '.product-fit-description',
-                        '.product-description',
-                        '.description',
-                        '[data-description]',
-                        '.fit-info'
-                    ];
-                    
-                    for (const selector of selectors) {
-                        const element = document.querySelector(selector);
-                        if (element) {
-                            return element.textContent.trim();
-                        }
-                    }
-                    return '';
+                    const element = document.querySelector('.product-fit-description, .product-description');
+                    return element ? element.textContent.trim() : '';
                 }
             """)
             logger.info(f"Found fit description: {bool(fit)}")
@@ -242,25 +185,12 @@ class ProductScraper:
             return ""
 
     async def _get_details(self) -> str:
-        """Extract product details"""
+        """Extract product details including care instructions and materials"""
         try:
             details = await self.page.evaluate("""
                 () => {
-                    const selectors = [
-                        '.product-details',
-                        '.product-information',
-                        '.details',
-                        '[data-details]',
-                        '.product-attributes'
-                    ];
-                    
-                    for (const selector of selectors) {
-                        const element = document.querySelector(selector);
-                        if (element) {
-                            return element.innerHTML.trim();
-                        }
-                    }
-                    return '';
+                    const detailsSection = document.querySelector('.product-details, .product-information');
+                    return detailsSection ? detailsSection.innerHTML.trim() : '';
                 }
             """)
             logger.info(f"Found details: {bool(details)}")
@@ -274,24 +204,13 @@ class ProductScraper:
         try:
             category = await self.page.evaluate("""
                 () => {
-                    const selectors = [
-                        '.breadcrumb',
-                        '.breadcrumbs',
-                        '[data-breadcrumbs]',
-                        '.product-category'
-                    ];
-                    
-                    for (const selector of selectors) {
-                        const element = document.querySelector(selector);
-                        if (element) {
-                            const links = Array.from(element.querySelectorAll('a'));
-                            return links
-                                .map(a => a.textContent.trim())
-                                .filter(text => text && !['Home', 'Start'].includes(text))
-                                .join(' > ');
-                        }
-                    }
-                    return '';
+                    const breadcrumbs = document.querySelector('.breadcrumb');
+                    if (!breadcrumbs) return '';
+                    const links = Array.from(breadcrumbs.querySelectorAll('a'));
+                    return links
+                        .map(a => a.textContent.trim())
+                        .filter(text => text && text !== 'Home')
+                        .join(' > ');
                 }
             """)
             logger.info(f"Found category: {category}")
@@ -300,11 +219,11 @@ class ProductScraper:
             logger.error(f"Error extracting category: {str(e)}")
             return ""
 
-    async def _get_metafields(self, product_data: Dict) -> Dict:
+    async def _get_metafields(self) -> Dict:
         """Get metafields with dynamic category mapping"""
         try:
-            category = product_data.get("kategorie", "")
-            sizes = product_data.get("groessen", [])
+            category = await self._get_category()
+            sizes = await self._get_sizes()
             
             metafields = {
                 "meta_google:age_group": "Erwachsener",
