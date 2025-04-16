@@ -40,14 +40,17 @@ class ProductScraper:
             # Wait for page to be fully loaded
             await asyncio.sleep(2)  # Give JavaScript some time to execute
             
-            # Check if we're on a product page
+            # Check if we're on a product page by looking for common product page elements
             is_product_page = await self.page.evaluate("""
                 () => {
-                    return Boolean(
-                        document.querySelector('[data-product-id]') ||
-                        document.querySelector('.product-detail') ||
-                        document.querySelector('.product-information')
-                    );
+                    const selectors = [
+                        '.product-detail',
+                        '.product-information',
+                        '.product-gallery',
+                        'h1.product-title',
+                        '[data-product-id]'
+                    ];
+                    return selectors.some(selector => document.querySelector(selector));
                 }
             """)
             
@@ -100,20 +103,23 @@ class ProductScraper:
                         '[data-product-id]',
                         '[data-article-number]',
                         '.product-number',
-                        '.sku'
+                        '.sku',
+                        '[itemprop="sku"]'
                     ];
                     
                     for (const selector of selectors) {
                         const element = document.querySelector(selector);
                         if (element) {
-                            return element.getAttribute('data-product-id') || 
-                                   element.getAttribute('data-article-number') || 
-                                   element.textContent.trim();
+                            const value = element.getAttribute('data-product-id') || 
+                                        element.getAttribute('data-article-number') || 
+                                        element.textContent.trim();
+                            if (value) return value;
                         }
                     }
                     return '';
                 }
             """)
+            logger.info(f"Found article number: {article_number}")
             return article_number or ""
         except Exception as e:
             logger.error(f"Error extracting article number: {str(e)}")
@@ -128,7 +134,8 @@ class ProductScraper:
                         'h1.product-title',
                         'h1.product-name',
                         '.product-detail h1',
-                        '[itemprop="name"]'
+                        '[itemprop="name"]',
+                        '.product-name'
                     ];
                     
                     for (const selector of selectors) {
@@ -140,6 +147,7 @@ class ProductScraper:
                     return '';
                 }
             """)
+            logger.info(f"Found product name: {name}")
             return name or ""
         except Exception as e:
             logger.error(f"Error extracting product name: {str(e)}")
@@ -154,7 +162,8 @@ class ProductScraper:
                         '.size-selector option:not([disabled])',
                         '.size-options .available',
                         '[data-size]',
-                        '.variant-size'
+                        '.variant-size',
+                        '.size-variant'
                     ];
                     
                     for (const selector of selectors) {
@@ -168,6 +177,7 @@ class ProductScraper:
                     return [];
                 }
             """)
+            logger.info(f"Found sizes: {sizes}")
             return sizes or []
         except Exception as e:
             logger.error(f"Error extracting sizes: {str(e)}")
@@ -182,7 +192,8 @@ class ProductScraper:
                         '.product-gallery img[src]',
                         '.product-images img[src]',
                         '.gallery-image[src]',
-                        '[data-image-role="product"] img[src]'
+                        '[data-image-role="product"] img[src]',
+                        '.product-detail img[src]'
                     ];
                     
                     for (const selector of selectors) {
@@ -196,6 +207,7 @@ class ProductScraper:
                     return [];
                 }
             """)
+            logger.info(f"Found {len(images)} images")
             return images or []
         except Exception as e:
             logger.error(f"Error extracting images: {str(e)}")
@@ -210,7 +222,8 @@ class ProductScraper:
                         '.product-fit-description',
                         '.product-description',
                         '.description',
-                        '[data-description]'
+                        '[data-description]',
+                        '.fit-info'
                     ];
                     
                     for (const selector of selectors) {
@@ -222,6 +235,7 @@ class ProductScraper:
                     return '';
                 }
             """)
+            logger.info(f"Found fit description: {bool(fit)}")
             return fit or ""
         except Exception as e:
             logger.error(f"Error extracting fit description: {str(e)}")
@@ -236,7 +250,8 @@ class ProductScraper:
                         '.product-details',
                         '.product-information',
                         '.details',
-                        '[data-details]'
+                        '[data-details]',
+                        '.product-attributes'
                     ];
                     
                     for (const selector of selectors) {
@@ -248,6 +263,7 @@ class ProductScraper:
                     return '';
                 }
             """)
+            logger.info(f"Found details: {bool(details)}")
             return self._clean_html(details) if details else ""
         except Exception as e:
             logger.error(f"Error extracting details: {str(e)}")
@@ -261,7 +277,8 @@ class ProductScraper:
                     const selectors = [
                         '.breadcrumb',
                         '.breadcrumbs',
-                        '[data-breadcrumbs]'
+                        '[data-breadcrumbs]',
+                        '.product-category'
                     ];
                     
                     for (const selector of selectors) {
@@ -277,6 +294,7 @@ class ProductScraper:
                     return '';
                 }
             """)
+            logger.info(f"Found category: {category}")
             return category or ""
         except Exception as e:
             logger.error(f"Error extracting category: {str(e)}")
@@ -298,6 +316,7 @@ class ProductScraper:
                 "meta_google:google_product_type": category.split(" > ")[-1] if category else "",
                 "meta_google:tags": ""
             }
+            logger.info("Generated metafields")
             return metafields
         except Exception as e:
             logger.error(f"Error generating metafields: {str(e)}")
