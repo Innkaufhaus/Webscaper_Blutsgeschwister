@@ -44,13 +44,20 @@ async def scrape_product(request: Request):
         
         # Set a longer timeout for scraping
         try:
-            async with asyncio.timeout(60):  # 60 seconds timeout
+            async with asyncio.timeout(120):  # 120 seconds timeout
                 async with ProductScraper() as scraper:
                     product_data = await scraper.scrape_product(product_url)
         except asyncio.TimeoutError:
+            logger.error("Scraping timeout")
             raise HTTPException(
                 status_code=504,
-                detail="Scraping timeout. The server took too long to respond."
+                detail="Scraping timeout. The server took too long to respond. Please try again."
+            )
+        except Exception as e:
+            logger.error(f"Error during scraping: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error during scraping: {str(e)}"
             )
             
         # Store the scraped data
@@ -60,6 +67,7 @@ async def scrape_product(request: Request):
         # Return a summary of the scraped data
         return {
             "status": "success",
+            "message": "Daten erfolgreich extrahiert",
             "data": {
                 "name": product_data.get("name", ""),
                 "artikelnummer": product_data.get("artikelnummer", ""),
@@ -68,14 +76,13 @@ async def scrape_product(request: Request):
             }
         }
         
-    except HTTPException as e:
-        logger.error(f"HTTP error during scraping: {str(e)}")
+    except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error during scraping: {str(e)}")
+        logger.error(f"Unexpected error: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"An error occurred while scraping: {str(e)}"
+            detail=f"Ein unerwarteter Fehler ist aufgetreten: {str(e)}"
         )
 
 @app.get("/download/{format}")
