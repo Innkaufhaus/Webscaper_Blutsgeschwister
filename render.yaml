@@ -1,11 +1,10 @@
 services:
   - type: web
     name: blutsgeschwister-scraper
-    env: python
+    runtime: python
     buildCommand: pip install -r requirements.txt && playwright install chromium
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: PYTHON_VERSION
-        value: 3.9.0
-      - key: PYTHONUNBUFFERED
-        value: "true"
+        value: 3.11.11
+    plan: free
